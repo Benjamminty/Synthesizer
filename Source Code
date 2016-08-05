@@ -1,0 +1,689 @@
+
+
+/*SYNTHESIZER PROJECT
+ * by Benjamin Miller, Mouser Electronics
+ * 
+ * This synthesizer should take an input from a capacative sensor and play a note associated with that sensor.
+ * This is acheived by assigning that "note" to a different pin through which it will be played. When a note
+ * is assigned a pin, the pin struct gets loaded with information about that pin (the current state, the index
+ * and the original index so that it can be refreshed).
+ * An interrupt will occur at 100kHz which will check to see if any of the pins need toggling. Each note has a certain frequency
+ * at which it must be toggled.
+ */
+
+#include <Wire.h>
+#include "CurieTimerOne.h"
+#include <Adafruit_MPR121.h>
+//Note index lookup table formula: (((freq[Hz])^(-1))*10^5)/2
+
+
+
+#define C2index  1528
+#define Cs2index 1442
+#define D2index  1362
+#define Eb2index 1286
+#define E2index  1214
+#define F2index  1146
+#define Fs2index 1080
+#define G2index  1020
+#define Gs2index 964
+#define A2index  908
+#define Bb2index 866
+#define B2index  810
+/************Beginning of Keyboard Range****************/
+#define C3index  381
+#define Cs3index 359
+#define D3index  339
+#define Eb3index 323
+#define E3index  305
+#define F3index  287
+#define Fs3index 269
+#define G3index  257
+#define Gs3index 241
+#define A3index  225
+#define Bb3index 215   
+#define B3index  203
+
+#define C4index  190
+#define Cs4index 179
+#define D4index  169
+#define Eb4index 161
+#define E4index  152
+#define F4index  143
+#define Fs4index 134
+#define G4index  128
+#define Gs4index 120
+#define A4index  112
+#define Bb4index 107
+#define B4index  101
+
+#define C5index  94
+#define Cs5index 89
+#define D5index  84
+#define Eb5index 80
+#define E5index  76
+#define F5index  71
+#define Fs5index 67
+#define G5index  63
+#define Gs5index 59
+#define A5index  56
+#define Bb5index 53
+#define B5index  50
+
+#define C6index  47
+#define Cs6index 44
+#define D6index  41
+#define Eb6index 39
+#define E6index  37
+#define F6index  35
+#define Fs6index 33
+#define G6index  31
+#define Gs6index 29
+#define A6index  28
+#define Bb6index 26
+#define B6index  24
+/****************End of Keyboard Range*******************/
+
+/*Pins 7-13 have associated structs which keep track of their currrent 
+state and the amount of interrupts until toggle should occur*/
+struct pin { 
+  uint8_t  used;                   //is the pin used? 1 for used, 0 for unused.
+  int8_t  keyAssigned;            //which key has been assigned to this pin? value from 0-23. -1 means no key was assigned to it.
+  uint8_t  state;                  //HIGH or LOW
+  uint16_t index;                  //how many interrupts until the next toggle occurs?  Determines pitch.
+  uint16_t origIndex;              //remembers what the original note is supposed to be.
+  uint16_t resetIndex;            //used to refresh index after each toggle.
+};
+typedef struct pin pin_t;
+  // create pin struct variables, which will be assigned to certain notes as they are played.
+
+  pin_t pin1;
+  pin_t pin2;
+  pin_t pin3;
+  pin_t pin4;
+  pin_t pin5;
+  pin_t pin6;
+  pin_t pin7;
+  pin_t pin8;
+  pin_t pin9;
+  pin_t pin10;
+  pin_t pin11;
+  pin_t pin12;
+  pin_t pin13;
+
+ 
+
+ Adafruit_MPR121 cap = Adafruit_MPR121();
+ Adafruit_MPR121 cap2 = Adafruit_MPR121();
+ uint16_t currtouched = 0;  //current keys being pressed
+ uint16_t currtouched2 = 0;
+ uint16_t lasttouched = 0;  //keys that were previously pressed
+ uint16_t lasttouched2 = 0;
+
+void setup() {
+Serial.begin(9600);
+delay(10);
+
+ /*        //clear pin used flags before program starts
+  *         
+  */
+  pinMode(A0, INPUT); //Mode selector bit 1
+  pinMode(A1, INPUT); //Mode selector bit 2
+  pinMode(A2, INPUT); //Tremelo Knob
+  pinMode(A2, INPUT); //Theremin Input (Vo from IR sensor)
+  pin1.used = 0;
+  pinMode(1, OUTPUT);
+  pin7.used = 0;
+  pin7.keyAssigned = -1;
+  pinMode(7, OUTPUT);  
+  pin8.used = 0;
+  pin8.keyAssigned = -1;
+  pinMode(8, OUTPUT);  
+  pin9.used = 0;
+  pin9.keyAssigned = -1;
+  pinMode(9, OUTPUT);  
+  pin10.used = 0;
+  pin10.keyAssigned = -1;
+  pinMode(10, OUTPUT);  
+  pin11.used = 0;
+  pin11.keyAssigned = -1;
+  pinMode(11, OUTPUT);  
+  pin12.used = 0;
+  pin12.keyAssigned = -1;
+  pinMode(12, OUTPUT);  
+  pin13.used = 0;
+  pin13.keyAssigned = -1;
+  pinMode(13, OUTPUT);  
+
+
+
+  //initialize the key sensors
+
+Serial.println("Setting Up");
+CurieTimerOne.start (4, interruptHandler);     //let's get the ball rolling; start the interrupt at 10us, or 100kHz
+
+  
+  // Default address is 0x5A, if tied to 3.3V its 0x5B
+  // If tied to SDA its 0x5C and if SCL then 0x5D
+  if (!cap.begin(0x5A)) {
+    while (1);
+  }
+
+    
+  if (!cap2.begin(0x5C)) {
+    while (1);
+  }
+
+
+
+}
+
+
+void loop() {
+ Serial.println("Loop");
+/************SET MODE*********************/
+ //set play mode based on selector switch position. Mode 1 is Octaves 2-3, Mode 2 is Octaves 3-4, Mode 3 is Octaves 4-5.
+ uint8_t mode;
+ if ((analogRead(A0) <= 50)&&(analogRead(A1) == 0)){
+  mode = 1;
+ }
+ if ((analogRead(A0) <= 50)&&(analogRead(A1) == 1023)){
+  mode = 2;
+ }
+ if ((analogRead(A0) == 1023)&&(analogRead(A1) == 1023)){
+  mode = 3;
+ }
+
+/**********READ KEYS************************/
+
+  //read currently touched pins.
+ currtouched = cap.touched();  
+
+ currtouched2 = cap2.touched();
+
+/*********NOTE RELEASE*********************/
+
+ //empty pins that no longer should have notes assigned to them.
+ for (uint8_t j=0; j<12; j++){
+  //if it was touched and now is not...
+  if (!(currtouched & _BV(j)) && (lasttouched & _BV(j)) ){      //...release the pin it was assigned to.
+     if (pin7.keyAssigned == j){          //find which pin was assigned to the released key.
+       pin7.used = 0;
+       pin7.keyAssigned = -1;
+     }
+     else if (pin8.keyAssigned == j){          
+       pin8.used = 0;
+       pin8.keyAssigned = -1;
+     }
+     else if (pin9.keyAssigned == j){          
+       pin9.used = 0;
+       pin9.keyAssigned = -1;
+     }
+     else if (pin10.keyAssigned == j){          
+       pin10.used = 0;
+       pin10.keyAssigned = -1;
+     }
+     else if (pin11.keyAssigned == j){         
+       pin11.used = 0;
+       pin11.keyAssigned = -1;
+     }
+     else if (pin12.keyAssigned == j){         
+       pin12.used = 0;
+       pin12.keyAssigned = -1;
+     }
+     else if (pin13.keyAssigned == j){        
+       pin13.used = 0;
+       pin13.keyAssigned = -1;
+     }
+  }
+ } 
+ //the same must be done with the second set of keys, but with slight changes.
+ for (uint8_t j=0; j<12; j++){
+  //if it was touched and now is not...
+  if (!(currtouched2 & _BV(j)) && (lasttouched2 & _BV(j)) ){      //...release the pin it was assigned to.
+     if (pin7.keyAssigned == j+12){          //find which pin was assigned to the released key.
+       pin7.used = 0;
+       pin7.keyAssigned = -1;
+     }
+     else if (pin8.keyAssigned == j+12){          
+       pin8.used = 0;
+       pin8.keyAssigned = -1;
+     }
+     else if (pin9.keyAssigned == j+12){          
+       pin9.used = 0;
+       pin9.keyAssigned = -1;
+     }
+     else if (pin10.keyAssigned == j+12){          
+       pin10.used = 0;
+       pin10.keyAssigned = -1;
+     }
+     else if (pin11.keyAssigned == j+12){         
+       pin11.used = 0;
+       pin11.keyAssigned = -1;
+     }
+     else if (pin12.keyAssigned == j+12){         
+       pin12.used = 0;
+       pin12.keyAssigned = -1;
+     }
+     else if (pin13.keyAssigned == j+12){        
+       pin13.used = 0;
+       pin13.keyAssigned = -1;
+     }
+  }
+ }
+
+/************NOTE PRESSED******************/
+
+ //take input from sensors and determine new keys being played.
+ //each key is assigned to a certain note index/pitch, but this changes depending on the mode.
+ uint16_t currentPitch = 0;
+ int16_t key = -1;
+ for (uint8_t j=0; j<12; j++){
+  if ((currtouched & _BV(j)) && !(lasttouched & _BV(j))){            //if a key was recently touched
+     if (j == 0){
+      if (mode == 1)currentPitch = C3index;
+      if (mode == 2)currentPitch = C4index;
+      if (mode == 3)currentPitch = C5index;
+     }
+     if (j == 1){
+      if (mode == 1)currentPitch = Cs3index;
+      if (mode == 2)currentPitch = Cs4index;
+      if (mode == 3)currentPitch = Cs5index;
+     }
+     if (j == 2){
+      if (mode == 1)currentPitch = D3index;
+      if (mode == 2)currentPitch = D4index;
+      if (mode == 3)currentPitch = D5index;
+     }
+     if (j == 3){
+      if (mode == 1)currentPitch = Eb3index;
+      if (mode == 2)currentPitch = Eb4index;
+      if (mode == 3)currentPitch = Eb5index;
+     }
+     if (j == 4){
+      if (mode == 1)currentPitch = E3index;
+      if (mode == 2)currentPitch = E4index;
+      if (mode == 3)currentPitch = E5index;
+     }
+     if (j == 5){
+      if (mode == 1)currentPitch = F3index;
+      if (mode == 2)currentPitch = F4index;
+      if (mode == 3)currentPitch = F5index;
+     }
+     if (j == 6){
+      if (mode == 1)currentPitch = Fs3index;
+      if (mode == 2)currentPitch = Fs4index;
+      if (mode == 3)currentPitch = Fs5index;
+     }
+     if (j == 7){
+      if (mode == 1)currentPitch = G3index;
+      if (mode == 2)currentPitch = G4index;
+      if (mode == 3)currentPitch = G5index;
+     }
+     if (j == 8){
+      if (mode == 1)currentPitch = Gs3index;
+      if (mode == 2)currentPitch = Gs4index;
+      if (mode == 3)currentPitch = Gs5index;
+     }
+     if (j == 9){
+      if (mode == 1)currentPitch = A3index;
+      if (mode == 2)currentPitch = A4index;
+      if (mode == 3)currentPitch = A5index;
+     }
+     if (j == 10){
+      if (mode == 1)currentPitch = Bb3index;
+      if (mode == 2)currentPitch = Bb4index;
+      if (mode == 3)currentPitch = Bb5index;
+     }
+     if (j == 11){
+      if (mode == 1)currentPitch = B3index;
+      if (mode == 2)currentPitch = B4index;
+      if (mode == 3)currentPitch = B5index;
+     }
+     key = j;
+  }
+ }
+ for (uint8_t j=0; j<12; j++){
+  if ((currtouched2 & _BV(j)) && !(lasttouched2 & _BV(j))){            //if a key was recently touched
+     if (j == 0){
+      if (mode == 1)currentPitch = C4index;
+      if (mode == 2)currentPitch = C5index;
+      if (mode == 3)currentPitch = C6index;
+     }
+     if (j == 1){
+      if (mode == 1)currentPitch = Cs4index;
+      if (mode == 2)currentPitch = Cs5index;
+      if (mode == 3)currentPitch = Cs6index;
+     }
+     if (j == 2){
+      if (mode == 1)currentPitch = D4index;
+      if (mode == 2)currentPitch = D5index;
+      if (mode == 3)currentPitch = D6index;
+     }
+     if (j == 3){
+      if (mode == 1)currentPitch = Eb4index;
+      if (mode == 2)currentPitch = Eb5index;
+      if (mode == 3)currentPitch = Eb6index;
+     }
+     if (j == 4){
+      if (mode == 1)currentPitch = E4index;
+      if (mode == 2)currentPitch = E5index;
+      if (mode == 3)currentPitch = E6index;
+     }
+     if (j == 5){
+      if (mode == 1)currentPitch = F4index;
+      if (mode == 2)currentPitch = F5index;
+      if (mode == 3)currentPitch = F6index;
+     }
+     if (j == 6){
+      if (mode == 1)currentPitch = Fs4index;
+      if (mode == 2)currentPitch = Fs5index;
+      if (mode == 3)currentPitch = Fs6index;
+     }
+     if (j == 7){
+      if (mode == 1)currentPitch = G4index;
+      if (mode == 2)currentPitch = G5index;
+      if (mode == 3)currentPitch = G6index;
+     }
+     if (j == 8){
+      if (mode == 1)currentPitch = Gs4index;
+      if (mode == 2)currentPitch = Gs5index;
+      if (mode == 3)currentPitch = Gs6index;
+     }
+     if (j == 9){
+      if (mode == 1)currentPitch = A4index;
+      if (mode == 2)currentPitch = A5index;
+      if (mode == 3)currentPitch = A6index;
+     }
+     if (j == 10){
+      if (mode == 1)currentPitch = Bb4index;
+      if (mode == 2)currentPitch = Bb5index;
+      if (mode == 3)currentPitch = Bb6index;
+     }
+     if (j == 11){
+      if (mode == 1)currentPitch = B4index;
+      if (mode == 2)currentPitch = B5index;
+      if (mode == 3)currentPitch = B6index;
+     }
+     key = j+12;
+  }
+ } 
+ lasttouched = currtouched;              // "save" the keys being pressed for the benefit of the new loop.
+ lasttouched2 = currtouched2;
+
+/***********SET PIN***********************/
+
+//parse available pins by checking pin.used. Assign the note to a pin with currentPitch and key.
+ /*
+
+  if (pin2.used == 0) {
+    pin2.index = C4index;
+    pin2.origIndex = C4index;
+    pin2.used = 1;
+  }
+  
+  if (pin3.used == 0) {
+    pin3.index = C4index;
+    pin3.origIndex = C4index;
+    pin3.used = 1;
+  }
+  
+  if (pin4.used == 0) {
+    pin4.index = C4index;
+    pin4.origIndex = C4index;
+    pin4.used = 1;
+  }
+  
+  if (pin5.used == 0) {
+    pin5.index = C4index;
+    pin5.origIndex = C4index;
+    pin5.used = 1;
+  }
+  
+  if (pin6.used == 0) { 
+    pin6.index = C4index;
+    pin6.origIndex = C4index;
+    pin6.used = 1;
+  } 
+  */
+ if (key >= 0){
+  if (pin7.used == 0) {
+    pin7.index = currentPitch;
+    pin7.origIndex = currentPitch;
+    pin7.resetIndex = pin7.origIndex;
+    pin7.keyAssigned = key;
+    pin7.used = 1;
+  }
+  
+  else if (pin8.used == 0) {
+    pin8.index = currentPitch;
+    pin8.origIndex = currentPitch;
+    pin8.resetIndex = pin8.origIndex;
+    pin8.keyAssigned = key;
+    pin8.used = 1;
+  }
+
+  else if (pin9.used == 0) {
+    pin9.index = currentPitch;
+    pin9.origIndex = currentPitch;
+    pin9.resetIndex = pin9.origIndex;
+    pin9.keyAssigned = key;
+    pin9.used = 1;
+  }
+
+  else if (pin10.used == 0) {
+    pin10.index = currentPitch;
+    pin10.origIndex = currentPitch;
+    pin10.resetIndex = pin10.origIndex;
+    pin10.keyAssigned = key;
+    pin10.used = 1;
+  }
+
+  else if (pin11.used == 0) {
+    pin11.index = currentPitch;
+    pin11.origIndex = currentPitch;
+    pin11.resetIndex = pin11.origIndex;
+    pin11.keyAssigned = key;
+    pin11.used = 1;
+  }
+
+  else if (pin12.used == 0) {
+    pin12.index = currentPitch;
+    pin12.origIndex = currentPitch;
+    pin12.resetIndex = pin12.origIndex;
+    pin12.keyAssigned = key;
+    pin12.used = 1;
+  }
+
+  else if (pin13.used == 0) {
+    pin13.index = currentPitch;
+    pin13.origIndex = currentPitch;
+    pin13.resetIndex = pin13.origIndex;
+    pin13.keyAssigned = key;
+    pin13.used = 1;
+  }
+ }
+ 
+ CheckVibrato();      //calls the vibrato function.
+
+}
+
+
+
+void interruptHandler () {               //Occurs every 10us to toggle the pins at their appropriate times.
+
+ if (pin1.used == 1) {
+  if (pin1.index == 0) {
+    pin1.state ^= 0x01;
+    pin1.index = pin1.resetIndex;
+  }
+  else pin1.index--;
+ }
+ 
+ if (pin7.used == 1) {
+  if (pin7.index == 0) {
+    pin7.state ^= 0x01;
+    pin7.index = pin7.resetIndex;
+  }
+  else pin7.index--;
+ }
+ 
+ if (pin8.used == 1) {        //if pin is in use... 
+  if (pin8.index == 0) {      // if it is time to service the pin, toggle state and refresh index.
+    pin8.state ^= 0x01;
+    pin8.index = pin8.resetIndex;
+  }
+  else pin8.index--;          // if not time to service, decrement the index.
+
+ }
+ 
+ if (pin9.used == 1) {
+  if (pin9.index == 0) {
+    pin9.state ^= 0x01;
+    pin9.index = pin9.resetIndex;
+  }
+  else pin9.index--;
+ }
+
+ if (pin10.used == 1) {
+  if (pin10.index == 0) {
+    pin10.state ^= 0x01;
+    pin10.index = pin10.resetIndex;
+  }
+  else pin10.index--;
+ }
+
+ if (pin11.used == 1) {
+  if (pin11.index == 0) {
+    pin11.state ^= 0x01;
+    pin11.index = pin11.resetIndex;
+  }
+  else pin11.index--;
+ }
+ 
+ if (pin12.used == 1) {
+  if (pin12.index == 0) {
+    pin12.state ^= 0x01;
+    pin12.index = pin12.resetIndex;
+  }
+  else pin12.index--;
+ }
+ 
+ if  (pin13.used == 1) {
+  if (pin13.index == 0) {
+    pin13.state ^= 0x01;
+    pin13.index = pin13.resetIndex;
+  }
+  else pin13.index--;
+ }
+  /*************WRITE TO PINS****************/
+ /*  //write whatever the current state is to the pin itself.
+  digitalWrite (2, pin2.state);
+  digitalWrite (3, pin3.state);
+  digitalWrite (4, pin4.state);
+  digitalWrite (5, pin5.state);
+  digitalWrite (6, pin6.state); */
+  digitalWrite (1, pin1.state);
+  digitalWrite (7, pin7.state);
+  digitalWrite (8, pin8.state);   
+  digitalWrite (9, pin9.state);
+  digitalWrite (10, pin10.state);
+  digitalWrite (11, pin11.state);
+  digitalWrite (12, pin12.state);
+  digitalWrite (13, pin13.state);
+}
+
+void CheckVibrato (void){
+
+   static int32_t BasePos = 0;
+   static int32_t VibratoVar = 0;
+
+   
+   if (analogRead(A2) > 110 ){               //if vibrato is engaged, check if it was previously engaged
+
+     if (BasePos != 0){                    //if it was previously engaged, and is currently still engaged
+        //calculate VibratoVar and add it to all current pin indexes then return
+        VibratoVar = analogRead(A2) - BasePos;
+
+        if (pin7.used == 1){
+          if((pin7.origIndex + VibratoVar) > 10){      //don't want to give pin negative indexes, in the case of a high pitch and a high pitch bend.
+            pin7.resetIndex = pin7.origIndex + VibratoVar;
+          }
+          else{
+            pin7.resetIndex = 0;
+          }
+        }        
+        if (pin8.used == 1){
+          if((pin8.origIndex + VibratoVar) > 10){      //don't want to give pin negative indexes, in the case of a high pitch and a high pitch bend.
+            pin8.resetIndex = pin8.origIndex + VibratoVar;
+          }
+          else{
+            pin8.resetIndex = 0;
+          }
+        }
+        if (pin9.used == 1){
+          if((pin9.origIndex + VibratoVar) > 10){      //don't want to give pin negative indexes, in the case of a high pitch and a high pitch bend.
+            pin9.resetIndex = pin9.origIndex + VibratoVar;
+          }
+          else{
+            pin9.resetIndex = 0;
+          }
+        }
+        if (pin10.used == 1){
+          if((pin10.origIndex + VibratoVar) > 10){      //don't want to give pin negative indexes, in the case of a high pitch and a high pitch bend.
+            pin10.resetIndex = pin10.origIndex + VibratoVar;
+          }
+          else{
+            pin10.resetIndex = 0;
+          }
+        }
+        if (pin11.used == 1){
+          if((pin11.origIndex + VibratoVar) > 10){      //don't want to give pin negative indexes, in the case of a high pitch and a high pitch bend.
+            pin11.resetIndex = pin11.origIndex + VibratoVar;
+          }
+          else{
+            pin11.resetIndex = 0;
+          }
+        }
+        if (pin12.used == 1){
+          if((pin12.origIndex + VibratoVar) > 10){      //don't want to give pin negative indexes, in the case of a high pitch and a high pitch bend.
+            pin12.resetIndex = pin12.origIndex + VibratoVar;
+          }
+          else{
+            pin12.resetIndex = 0;
+          }
+        }
+        if (pin13.used == 1){
+          if((pin13.origIndex + VibratoVar) > 10){      //don't want to give pin negative indexes, in the case of a high pitch and a high pitch bend.
+            pin13.resetIndex = pin13.origIndex + VibratoVar;
+          }
+          else{
+            pin13.resetIndex = 0;
+          }
+        }
+     }
+     else {  //if it was not previously engaged, set the BasePos then return
+      BasePos = analogRead(A2);
+     }
+   }
+    
+   else {                          //if it is not engaged, check if it was previously engaged
+
+      if (BasePos != 0){  //if it was previously engaged but is now not engages, reset BasePos and VibratoVar to 0, reset notes to their original pitches, then return
+        BasePos = 0;
+        VibratoVar = 0;
+
+        pin7.resetIndex = pin7.origIndex;
+        pin8.resetIndex = pin8.origIndex;
+        pin9.resetIndex = pin9.origIndex;
+        pin10.resetIndex = pin10.origIndex;
+        pin11.resetIndex = pin11.origIndex;
+        pin12.resetIndex = pin12.origIndex;
+        pin13.resetIndex = pin13.origIndex;
+      }
+       //if it was not previously engaged and is still not, return immediately.
+   }
+}
+
+
+
