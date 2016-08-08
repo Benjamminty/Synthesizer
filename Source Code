@@ -121,16 +121,14 @@ typedef struct pin pin_t;
  uint16_t lasttouched2 = 0;
 
 void setup() {
-Serial.begin(9600);
-delay(10);
 
  /*        //clear pin used flags before program starts
   *         
   */
   pinMode(A0, INPUT); //Mode selector bit 1
   pinMode(A1, INPUT); //Mode selector bit 2
-  pinMode(A2, INPUT); //Tremelo Knob
-  pinMode(A2, INPUT); //Theremin Input (Vo from IR sensor)
+  pinMode(A2, INPUT); //IR sensor
+
   pin1.used = 0;
   pinMode(1, OUTPUT);
   pin7.used = 0;
@@ -159,7 +157,7 @@ delay(10);
 
   //initialize the key sensors
 
-Serial.println("Setting Up");
+
 CurieTimerOne.start (4, interruptHandler);     //let's get the ball rolling; start the interrupt at 10us, or 100kHz
 
   
@@ -180,7 +178,10 @@ CurieTimerOne.start (4, interruptHandler);     //let's get the ball rolling; sta
 
 
 void loop() {
- Serial.println("Loop");
+
+
+
+ 
 /************SET MODE*********************/
  //set play mode based on selector switch position. Mode 1 is Octaves 2-3, Mode 2 is Octaves 3-4, Mode 3 is Octaves 4-5.
  uint8_t mode;
